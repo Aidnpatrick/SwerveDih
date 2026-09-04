@@ -37,7 +37,7 @@ public class Swerve extends SubsystemBase {
     SwerveModuleState[] moduleStates =
         Constants.DriveConstants.kSwerveKinematics.toSwerveModuleStates(chassisSpeeds);
     SwerveDriveKinematics.desaturateWheelSpeeds(
-        moduleStates, Constants.DriveConstants.kCommissioningMaxModuleSpeedMetersPerSecond);
+        moduleStates, Constants.DriveConstants.kMaxModuleSpeedMetersPerSecond);
 
     frontLeft.setDesiredState(moduleStates[0]);
     frontRight.setDesiredState(moduleStates[1]);
