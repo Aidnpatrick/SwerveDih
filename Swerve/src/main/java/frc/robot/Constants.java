@@ -35,12 +35,9 @@ public final class Constants {
   }
 
   public static final class DriveControlConstants {
+    public static final boolean kEnableDriveVelocityCorrection = false;
     public static final double kDriveKpVoltsPerMeterPerSecond = 0.0;
-    public static final double kDriveKiVoltsPerMeter = 0.0;
-    public static final double kDriveKdVoltSecondsPerMeter = 0.0;
-    public static final double kDriveKsVolts = 0.0;
-    public static final double kDriveKvVoltSecondsPerMeter = 0.0;
-    public static final double kDriveKaVoltSecondsSquaredPerMeter = 0.0;
+    public static final double kMaxDriveCorrectionVoltage = 0.5;
 
     private DriveControlConstants() {}
   }

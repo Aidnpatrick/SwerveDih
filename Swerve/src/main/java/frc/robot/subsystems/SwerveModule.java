@@ -7,7 +7,6 @@ import com.ctre.phoenix6.hardware.TalonFX;
 import com.ctre.phoenix6.signals.InvertedValue;
 import com.ctre.phoenix6.signals.NeutralModeValue;
 import edu.wpi.first.math.MathUtil;
-import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.controller.ProfiledPIDController;
 import edu.wpi.first.math.controller.SimpleMotorFeedforward;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -22,11 +21,6 @@ public class SwerveModule {
   private final TalonFX driveMotor;
   private final TalonFX turningMotor;
   private final CANcoder turningEncoder;
-  private final PIDController drivePid =
-      new PIDController(
-          Constants.DriveControlConstants.kDriveKpVoltsPerMeterPerSecond,
-          Constants.DriveControlConstants.kDriveKiVoltsPerMeter,
-          Constants.DriveControlConstants.kDriveKdVoltSecondsPerMeter);
   private final ProfiledPIDController turningPid =
       new ProfiledPIDController(
           Constants.TurningControlConstants.kTurningKpVoltsPerRadian,
@@ -35,11 +29,6 @@ public class SwerveModule {
           new TrapezoidProfile.Constraints(
               Constants.TurningControlConstants.kTurningMaxVelocityRadiansPerSecond,
               Constants.TurningControlConstants.kTurningMaxAccelerationRadiansPerSecondSquared));
-  private final SimpleMotorFeedforward driveFeedforward =
-      new SimpleMotorFeedforward(
-          Constants.DriveControlConstants.kDriveKsVolts,
-          Constants.DriveControlConstants.kDriveKvVoltSecondsPerMeter,
-          Constants.DriveControlConstants.kDriveKaVoltSecondsSquaredPerMeter);
   private final SimpleMotorFeedforward turningFeedforward =
       new SimpleMotorFeedforward(
           Constants.TurningControlConstants.kTurningKsVolts,
@@ -51,10 +40,10 @@ public class SwerveModule {
   private Rotation2d heldAngle = Rotation2d.kZero;
   private Rotation2d desiredAngle = Rotation2d.kZero;
   private double desiredSpeedMetersPerSecond;
-  private double previousDesiredSpeedMetersPerSecond;
   private double measuredSpeedMetersPerSecond;
-  private double driveFeedforwardVoltage;
-  private double driveFeedbackVoltage;
+  private double normalizedDirectDriveRequest;
+  private double baseDirectDriveVoltage;
+  private double driveCorrectionVoltage;
   private double commandedDriveVoltage;
   private double turningPidVoltage;
   private double turningFeedforwardVoltage;
@@ -185,33 +174,50 @@ public class SwerveModule {
     }
 
     calculateDriveVoltage();
-    applyDriveVoltage(driveFeedforwardVoltage + driveFeedbackVoltage);
+    applyDriveVoltage(baseDirectDriveVoltage + driveCorrectionVoltage);
     turningPidVoltage = turningPid.calculate(currentAngleRadians, desiredAngle.getRadians());
     turningFeedforwardVoltage = turningFeedforward.calculate(turningPid.getSetpoint().velocity);
     applyTurningVoltage(turningPidVoltage + turningFeedforwardVoltage);
-    previousDesiredSpeedMetersPerSecond = desiredSpeedMetersPerSecond;
   }
 
   private void calculateDriveVoltage() {
     measuredSpeedMetersPerSecond = 0.0;
-    driveFeedforwardVoltage = 0.0;
-    driveFeedbackVoltage = 0.0;
+    normalizedDirectDriveRequest = 0.0;
+    baseDirectDriveVoltage = calculateBaseDirectDriveVoltage();
+    driveCorrectionVoltage = calculateDriveCorrectionVoltage();
+  }
+
+  private double calculateBaseDirectDriveVoltage() {
+    double maximumModuleSpeed = Constants.DriveConstants.kMaxModuleSpeedMetersPerSecond;
+    if (!Double.isFinite(maximumModuleSpeed) || maximumModuleSpeed <= 0.0) {
+      return 0.0;
+    }
+    normalizedDirectDriveRequest =
+        MathUtil.clamp(desiredSpeedMetersPerSecond / maximumModuleSpeed, -1.0, 1.0);
+    return normalizedDirectDriveRequest * Constants.DriveConstants.kMaxDriveVoltage;
+  }
+
+  private double calculateDriveCorrectionVoltage() {
     if (!hasValidDriveMeasurement()) {
-      return;
+      return 0.0;
     }
 
     measuredSpeedMetersPerSecond = getDriveVelocityMetersPerSecond();
-    driveFeedforwardVoltage =
-        driveFeedforward.calculateWithVelocities(
-            previousDesiredSpeedMetersPerSecond, desiredSpeedMetersPerSecond);
-    driveFeedbackVoltage =
-        drivePid.calculate(measuredSpeedMetersPerSecond, desiredSpeedMetersPerSecond);
-    if (!Double.isFinite(driveFeedforwardVoltage)) {
-      driveFeedforwardVoltage = 0.0;
+    if (!Constants.DriveControlConstants.kEnableDriveVelocityCorrection
+        || desiredSpeedMetersPerSecond == 0.0) {
+      return 0.0;
     }
-    if (!Double.isFinite(driveFeedbackVoltage)) {
-      driveFeedbackVoltage = 0.0;
+
+    double correctionVoltage =
+        Constants.DriveControlConstants.kDriveKpVoltsPerMeterPerSecond
+            * (desiredSpeedMetersPerSecond - measuredSpeedMetersPerSecond);
+    if (!Double.isFinite(correctionVoltage)) {
+      return 0.0;
     }
+    return MathUtil.clamp(
+        correctionVoltage,
+        -Constants.DriveControlConstants.kMaxDriveCorrectionVoltage,
+        Constants.DriveControlConstants.kMaxDriveCorrectionVoltage);
   }
 
   private void applyDriveVoltage(double requestedVoltage) {
@@ -241,12 +247,11 @@ public class SwerveModule {
       desiredAngle = heldAngle;
       turningPid.reset(currentAngleRadians);
     }
-    drivePid.reset();
     desiredSpeedMetersPerSecond = 0.0;
-    previousDesiredSpeedMetersPerSecond = 0.0;
     measuredSpeedMetersPerSecond = 0.0;
-    driveFeedforwardVoltage = 0.0;
-    driveFeedbackVoltage = 0.0;
+    normalizedDirectDriveRequest = 0.0;
+    baseDirectDriveVoltage = 0.0;
+    driveCorrectionVoltage = 0.0;
     turningPidVoltage = 0.0;
     turningFeedforwardVoltage = 0.0;
     applyDriveVoltage(0.0);
@@ -261,8 +266,10 @@ public class SwerveModule {
     SmartDashboard.putNumber(config.name + "/Measured Velocity Mps", measuredSpeedMetersPerSecond);
     SmartDashboard.putNumber(
         config.name + "/Velocity Error Mps", desiredSpeedMetersPerSecond - measuredSpeedMetersPerSecond);
-    SmartDashboard.putNumber(config.name + "/Drive Feedforward Voltage", driveFeedforwardVoltage);
-    SmartDashboard.putNumber(config.name + "/Drive Feedback Voltage", driveFeedbackVoltage);
+    SmartDashboard.putNumber(
+        config.name + "/Normalized Direct Drive Request", normalizedDirectDriveRequest);
+    SmartDashboard.putNumber(config.name + "/Base Direct Drive Voltage", baseDirectDriveVoltage);
+    SmartDashboard.putNumber(config.name + "/Drive P Correction Voltage", driveCorrectionVoltage);
     SmartDashboard.putNumber(config.name + "/Commanded Drive Voltage", commandedDriveVoltage);
     SmartDashboard.putNumber(config.name + "/Desired Angle Degrees", desiredAngle.getDegrees());
     SmartDashboard.putNumber(config.name + "/Measured Angle Degrees", currentAngle.getDegrees());
