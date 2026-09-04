@@ -1,47 +1,71 @@
 package frc.robot.commands;
 
+import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.filter.SlewRateLimiter;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
-
+import frc.robot.Constants;
+import frc.robot.subsystems.Swerve;
 
 public class ArcadeDrive extends Command {
-    private Swerve m_serve;
-    private CommandXboxController controller;
-    
-    public ArcadeDrive(Swerve m_swerve, CommandXboxController controller) {
-        this.m_serve = m_swerve;
-        this.controller = controller;
-        addRequiements(m_swerve);
-        
-    }
-    public void initialize() {
+  // Drivetrain controlled by this command
+  private final Swerve swerve;
+  // Xbox controller that supplies driver input
+  private final CommandXboxController controller;
+  // Smooth forward
+  private final SlewRateLimiter xLimiter =
+      new SlewRateLimiter(Constants.DriveConstants.kTranslationSlewRateMetersPerSecondSquared);
+  // Smooth left and right command changes
+  private final SlewRateLimiter yLimiter =
+      new SlewRateLimiter(Constants.DriveConstants.kTranslationSlewRateMetersPerSecondSquared);
+  // Smooth rotation command change
+  private final SlewRateLimiter rotationLimiter =
+      new SlewRateLimiter(Constants.DriveConstants.kRotationSlewRateRadiansPerSecondSquared);
 
-    }
-    public void execute() {
-        double x = -controller.getRawAxis(1);
-        double y = -controller.getRawAxis(0);
-        double zRot = -controller.getRawAxis(4);
+  public ArcadeDrive(Swerve swerve, CommandXboxController controller) {
+    this.swerve = swerve;
+    this.controller = controller;
+    addRequirements(swerve);
+  }
 
-        if(Math.abs(x) < Constants.DEADBAND) x = 0;
-        if(Math.abs(y) < Constants.DEADBAND) y = 0;
-        if(Math.abs(zRot) < Constants.DEADBAND) zRot = 0;
+  @Override
+  public void initialize() {
+    // Begin each drive command from zero speed demanded by greedy humans
+    xLimiter.reset(0.0);
+    yLimiter.reset(0.0);
+    rotationLimiter.reset(0.0);
+  }
 
-        x*= Constants.xPercent;
-        y *= Constants.yPercent;
-        zRot *= Constants.zPercent;
-        if(controller.rightBumper().getAsBoolean()) {
-            m_swerve.drive(new ChassisSpeeds(x,y,zRot));
-        }
-        else {
-            m_swerve.drive(ChassisSpeeds.fromFieldRelativeSpeeds(x,y,zRot,m_swerve.getHeading));
-        }
-    }
+  @Override
+  public void execute() {
+    // forward&backward, strafe, and rotation sticks.
+    double xInput = MathUtil.applyDeadband(-controller.getRawAxis(1), Constants.OperatorConstants.kDeadband);
+    double yInput = MathUtil.applyDeadband(-controller.getRawAxis(0), Constants.OperatorConstants.kDeadband);
+    double rotationInput =
+        MathUtil.applyDeadband(-controller.getRawAxis(4), Constants.OperatorConstants.kDeadband);
+    // Convert controller inputs into robot relative speeds (this prob wont work which is why this branch is experimental)
+    double xSpeed =
+        xLimiter.calculate(
+            xInput * Constants.DriveConstants.kCommissioningMaxModuleSpeedMetersPerSecond);
+    double ySpeed =
+        yLimiter.calculate(
+            yInput * Constants.DriveConstants.kCommissioningMaxModuleSpeedMetersPerSecond);
+    double rotationSpeed =
+        rotationLimiter.calculate(
+            rotationInput * Constants.DriveConstants.kMaxAngularSpeedRadiansPerSecond);
+    // Send the chassis request to WPILib swerve kinematics which does ts for me
+    swerve.drive(new ChassisSpeeds(xSpeed, ySpeed, rotationSpeed));
+  }
 
-    public void end(boolean interrupted) {
+  @Override
+  public void end(boolean interrupted) {
+    // close the old drive voltage before we blow up
+    swerve.stop();
+  }
 
-    }
-
-    public boolean isFinished() {
-        return false;
-    }
+  @Override
+  public boolean isFinished() {
+    return false;
+  }
 }
